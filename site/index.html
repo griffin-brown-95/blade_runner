@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blade Runner</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root { --bg:#fafafa; --card:#fff; --fg:#1a1a1a; --muted:#6b6b6b; --line:#e4e4e4; --accent:#1f5fbf; --accent2:#9ab6e0; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111317; --card:#1a1d23; --fg:#e8e8e8; --muted:#9a9a9a; --line:#2b2f37; --accent:#6ea0ec; --accent2:#34507a; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui, -apple-system, sans-serif; }
+  main { max-width:1100px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { margin:0; font-size:22px; }
+  .sub { color:var(--muted); margin:4px 0 20px; font-size:13px; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-bottom:16px; }
+  select { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--fg); }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:12px; margin-bottom:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .kpi .label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  .kpi .value { font-size:26px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .chart { height:320px; margin-bottom:16px; }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  th, td { text-align:right; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--muted); font-weight:500; font-size:12px; cursor:pointer; }
+  tbody tr { cursor:pointer; }
+  tbody tr:hover { background:var(--bg); }
+  .scroll { overflow-x:auto; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Blade Runner</h1>
+  <p class="sub" id="sub">US Speedskating practice laps at the Utah Olympic Oval short track (111 m).</p>
+
+  <div class="row">
+    <label>Skater <select id="skater"><option value="">All skaters</option></select></label>
+  </div>
+
+  <div class="kpis">
+    <div class="card kpi"><div class="label">Training days</div><div class="value" id="k-days">–</div></div>
+    <div class="card kpi"><div class="label">Sessions</div><div class="value" id="k-sessions">–</div></div>
+    <div class="card kpi"><div class="label">Laps</div><div class="value" id="k-laps">–</div></div>
+    <div class="card kpi"><div class="label">Fastest lap</div><div class="value" id="k-fastest">–</div></div>
+  </div>
+
+  <div class="card chart"><canvas id="trend"></canvas></div>
+
+  <div class="card scroll">
+    <table>
+      <thead><tr>
+        <th data-k="skater">Skater</th><th data-k="training_days">Days</th><th data-k="sessions">Sessions</th>
+        <th data-k="laps">Laps</th><th data-k="fastest_lap_sec">Fastest (s)</th><th data-k="last_day">Last seen</th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmt = n => n == null ? "–" : n.toLocaleString();
+let data, chart, sortKey = "laps", sortDir = -1;
+
+fetch("data.json").then(r => r.json()).then(d => {
+  data = d;
+  $("sub").textContent += ` Updated ${d.generated_at?.slice(0, 10) ?? "–"}.`;
+  for (const t of [...d.totals].sort((a, b) => a.skater.localeCompare(b.skater)))
+    $("skater").add(new Option(t.skater, t.skater));
+  $("skater").onchange = render;
+  document.querySelectorAll("th").forEach(th => th.onclick = () => {
+    sortDir = sortKey === th.dataset.k ? -sortDir : -1; sortKey = th.dataset.k; renderTable();
+  });
+  render();
+});
+
+function render() {
+  const who = $("skater").value;
+  const days = data.days.filter(d => !who || d.skater === who);
+  const dates = [...new Set(days.map(d => d.activity_date))].sort();
+
+  $("k-days").textContent = fmt(dates.length);
+  $("k-sessions").textContent = fmt(days.reduce((s, d) => s + d.sessions, 0));
+  $("k-laps").textContent = fmt(days.reduce((s, d) => s + d.laps, 0));
+  const best = Math.min(...days.map(d => d.fastest_lap_sec));
+  $("k-fastest").textContent = isFinite(best) ? best.toFixed(3) + "s" : "–";
+
+  // Per date: best lap (line) and laps skated (bars).
+  const byDate = Object.fromEntries(dates.map(k => [k, { best: Infinity, laps: 0 }]));
+  for (const d of days) {
+    byDate[d.activity_date].best = Math.min(byDate[d.activity_date].best, d.fastest_lap_sec);
+    byDate[d.activity_date].laps += d.laps;
+  }
+  const series = {
+    labels: dates,
+    datasets: [
+      { type: "line", label: "Fastest lap (s)", data: dates.map(k => byDate[k].best), yAxisID: "y",
+        borderColor: css("--accent"), backgroundColor: css("--accent"), tension: .25, pointRadius: 3 },
+      { type: "bar", label: "Laps", data: dates.map(k => byDate[k].laps), yAxisID: "y1",
+        backgroundColor: css("--accent2") },
+    ],
+  };
+  if (chart) { chart.data = series; chart.update(); }
+  else chart = new Chart($("trend"), {
+    data: series,
+    options: {
+      maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+      color: css("--muted"),
+      scales: {
+        x: { ticks: { color: css("--muted") }, grid: { display: false } },
+        y: { position: "left", title: { display: true, text: "Fastest lap (s)", color: css("--muted") },
+             ticks: { color: css("--muted") }, grid: { color: css("--line") } },
+        y1: { position: "right", title: { display: true, text: "Laps", color: css("--muted") },
+              ticks: { color: css("--muted") }, grid: { display: false } },
+      },
+    },
+  });
+  renderTable();
+}
+
+function renderTable() {
+  const who = $("skater").value;
+  const rows = data.totals.filter(t => !who || t.skater === who)
+    .sort((a, b) => (a[sortKey] > b[sortKey] ? 1 : a[sortKey] < b[sortKey] ? -1 : 0) * sortDir);
+  $("tbody").innerHTML = rows.map(t => `<tr data-s="${t.skater}">
+    <td>${t.skater}</td><td>${fmt(t.training_days)}</td><td>${fmt(t.sessions)}</td>
+    <td>${fmt(t.laps)}</td><td>${t.fastest_lap_sec?.toFixed(3) ?? "–"}</td><td>${t.last_day}</td></tr>`).join("");
+  $("tbody").querySelectorAll("tr").forEach(tr => tr.onclick = () => {
+    $("skater").value = $("skater").value === tr.dataset.s ? "" : tr.dataset.s; render();
+  });
+}
+</script>
+</body>
+</html>

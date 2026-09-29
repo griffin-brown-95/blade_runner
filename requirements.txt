@@ -1,0 +1,4 @@
+requests
+# Option B only:
+streamlit
+pandas

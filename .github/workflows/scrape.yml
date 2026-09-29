@@ -1,0 +1,49 @@
+# Nightly: pull new laps into data/sporthive.sqlite, commit it, rebuild the dashboard,
+# and publish site/ to GitHub Pages. No servers, no secrets.
+name: scrape-and-publish
+
+on:
+  schedule:
+    - cron: "0 7 * * *"   # 01:00 Mountain
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python ingest.py
+      - run: python export.py
+      - name: Commit data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/sporthive.sqlite site/data.json
+          git diff --cached --quiet || git commit -m "data: nightly scrape $(date -u +%F)"
+          git push
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: scrape
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
