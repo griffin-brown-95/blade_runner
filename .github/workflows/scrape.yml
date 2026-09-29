@@ -6,6 +6,9 @@ on:
   schedule:
     - cron: "0 7 * * *"   # 01:00 Mountain
   workflow_dispatch:
+  push:                   # editing chips.csv on GitHub republishes the dashboard
+    branches: [main]
+    paths: [data/chips.csv]
 
 permissions:
   contents: write

@@ -7,21 +7,21 @@ To move to Snowflake later, swap `load()` for a snowflake-connector query
 against the same views (sql/views.sql) -- the rest of the app is unchanged.
 """
 
-import sqlite3
-
 import pandas as pd
 import streamlit as st
 
-from ingest import DEFAULT_DB, ROOT
+from ingest import DEFAULT_DB, connect
 
 st.set_page_config(page_title="Blade Runner", layout="wide")
 
 
 @st.cache_data(ttl=600)
 def load(sql: str, params: tuple = ()) -> pd.DataFrame:
-    with sqlite3.connect(DEFAULT_DB) as conn:
-        conn.executescript((ROOT / "sql" / "views.sql").read_text())
+    conn = connect(DEFAULT_DB)  # reloads data/chips.csv
+    try:
         return pd.read_sql(sql, conn, params=params)
+    finally:
+        conn.close()
 
 
 days = load("SELECT * FROM skater_day WHERE laps > 0")
@@ -31,14 +31,21 @@ st.title("Blade Runner")
 st.caption("US Speedskating practice laps, UOO short track (111 m)")
 
 with st.sidebar:
-    skaters = sorted(days["skater"].unique())
-    picked = st.multiselect("Skaters", skaters)
+    picked = st.multiselect("Skaters", sorted(days["skater"].dropna().unique()))
+    chips = (days.assign(skater=days["skater"].fillna("unassigned"))
+             .groupby("chip_code")["skater"].agg(lambda s: ", ".join(sorted(set(s)))))
+    picked_chips = st.multiselect("Transponders", chips.index, format_func=lambda c: f"{c} · {chips[c]}")
+    named_only = st.toggle("Named skaters only", value=True)
     lo, hi = days["activity_date"].min().date(), days["activity_date"].max().date()
     date_range = st.date_input("Dates", (lo, hi), min_value=lo, max_value=hi)
 
 view = days
 if picked:
     view = view[view["skater"].isin(picked)]
+if picked_chips:
+    view = view[view["chip_code"].isin(picked_chips)]
+if named_only and not (picked or picked_chips):
+    view = view[view["skater"].notna()]
 if len(date_range) == 2:
     view = view[view["activity_date"].between(pd.Timestamp(date_range[0]), pd.Timestamp(date_range[1]))]
 
@@ -55,9 +62,12 @@ st.line_chart(trend if picked else trend.min(axis=1).rename("team best"))
 st.subheader("Laps by day")
 st.bar_chart(view.groupby("activity_date")["laps"].sum())
 
-st.subheader("Skaters")
-totals = (view.groupby("skater")
-          .agg(training_days=("activity_date", "nunique"), sessions=("sessions", "sum"),
+group_by = st.radio("Table by", ["skater", "chip_code"], horizontal=True,
+                    format_func={"skater": "Skater", "chip_code": "Transponder"}.get)
+other = "chip_code" if group_by == "skater" else "skater"
+totals = (view.fillna({"skater": "unassigned"}).groupby(group_by)
+          .agg(**{other + "s": (other, lambda s: ", ".join(sorted(set(s))))},
+               training_days=("activity_date", "nunique"), sessions=("sessions", "sum"),
                laps=("laps", "sum"), fastest_lap_sec=("fastest_lap_sec", "min"),
                last_seen=("activity_date", "max"))
           .sort_values("laps", ascending=False))

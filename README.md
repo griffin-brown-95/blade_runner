@@ -27,10 +27,32 @@ streamlit run streamlit_app.py                                    # or the Strea
 | `activities` | one transponder (chip) on one day       |
 | `sessions`   | one continuous on-ice run in that day   |
 | `laps`       | one 111 m lap                           |
-| `chips`      | optional chip → skater name mapping     |
+| `chip_assignments` | loaded from `data/chips.csv` on every run |
 
-Views: `skater_day` (sessions, laps, fastest/avg lap per chip-day) and `skater_totals`
-(training days, sessions, laps, fastest lap per skater).
+Views: `skater_day` (per chip-day, attributed to whoever held the chip that day),
+`skater_totals` (across all of a skater's chips) and `chip_totals`.
+
+## Transponders → skaters
+
+`data/chips.csv` is the source of truth. Transponders are keyed on `chip_code` (the hardware ID,
+e.g. `LS-41603`), not Sporthive's editable label.
+
+```csv
+chip_code,skater,valid_from,valid_to,note
+LS-41603,Ben,2026-08-03,2026-10-14,broke
+LS-99999,Ben,2026-10-15,,replaces LS-41603
+```
+
+- Blank `valid_to` = still assigned. Dates are inclusive. A chip can't have two skaters on one day.
+- Ben's laps on the old chip stay his; from Oct 15 the old chip is unassigned.
+- Chips not in the CSV fall back to their Sporthive label if it's a name.
+
+Three ways to edit it:
+1. **GitHub web UI**: edit `data/chips.csv` in the browser. The workflow republishes the site.
+2. **CLI**: `python chips.py assign LS-99999 "Ben" --from 2026-10-15 --replaces LS-41603`
+3. **Streamlit**: the *Transponders* page is an editable table, with a list of chips seen but not yet assigned.
+
+`python chips.py seed` adds every chip whose Sporthive label is a name.
 
 ## Deployment
 
@@ -40,7 +62,6 @@ no secrets, no cloud accounts. To hand this to the team, they fork the repo and 
 
 ## Known data caveats (to work through)
 
-- A chip is a transponder, not a person. Chips get swapped/shared; fill `chips` to name them.
 - Sessions are split by the timing system when a lap exceeds ~20 s; no lap is longer than that.
 - Lap times mix warm-up, technique, and race-pace laps. Fastest-lap is robust; averages are not.
 - The location includes non-team skaters (public sessions, other clubs).

@@ -32,8 +32,12 @@ CREATE TABLE IF NOT EXISTS laps (
     PRIMARY KEY (activity_id, session_nr, lap_nr)
 );
 
--- Optional hand-maintained mapping from transponder to skater name.
-CREATE TABLE IF NOT EXISTS chips (
-    chip_label     TEXT PRIMARY KEY,
-    skater         TEXT
+-- Loaded from data/chips.csv on every run (see chips.py). Do not edit here.
+DROP TABLE IF EXISTS chips;
+CREATE TABLE IF NOT EXISTS chip_assignments (
+    chip_code      TEXT NOT NULL,
+    skater         TEXT NOT NULL,
+    valid_from     TEXT,                  -- NULL = since forever
+    valid_to       TEXT,                  -- NULL = still assigned
+    note           TEXT
 );

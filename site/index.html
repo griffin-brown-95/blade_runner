@@ -29,6 +29,8 @@
   tbody tr { cursor:pointer; }
   tbody tr:hover { background:var(--bg); }
   .scroll { overflow-x:auto; }
+  td.muted { color:var(--muted); text-align:left; white-space:normal; font-size:13px; }
+  label { display:flex; gap:6px; align-items:center; }
 </style>
 </head>
 <body>
@@ -38,6 +40,9 @@
 
   <div class="row">
     <label>Skater <select id="skater"><option value="">All skaters</option></select></label>
+    <label>Transponder <select id="chip"><option value="">All transponders</option></select></label>
+    <label><input type="checkbox" id="named" checked> Named skaters only</label>
+    <label>Table by <select id="groupBy"><option value="skater">Skater</option><option value="chip_code">Transponder</option></select></label>
   </div>
 
   <div class="kpis">
@@ -51,10 +56,7 @@
 
   <div class="card scroll">
     <table>
-      <thead><tr>
-        <th data-k="skater">Skater</th><th data-k="training_days">Days</th><th data-k="sessions">Sessions</th>
-        <th data-k="laps">Laps</th><th data-k="fastest_lap_sec">Fastest (s)</th><th data-k="last_day">Last seen</th>
-      </tr></thead>
+      <thead><tr id="thead"></tr></thead>
       <tbody id="tbody"></tbody>
     </table>
   </div>
@@ -64,23 +66,30 @@
 const $ = id => document.getElementById(id);
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const fmt = n => n == null ? "–" : n.toLocaleString();
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 let data, chart, sortKey = "laps", sortDir = -1;
 
 fetch("data.json").then(r => r.json()).then(d => {
   data = d;
   $("sub").textContent += ` Updated ${d.generated_at?.slice(0, 10) ?? "–"}.`;
-  for (const t of [...d.totals].sort((a, b) => a.skater.localeCompare(b.skater)))
-    $("skater").add(new Option(t.skater, t.skater));
-  $("skater").onchange = render;
-  document.querySelectorAll("th").forEach(th => th.onclick = () => {
-    sortDir = sortKey === th.dataset.k ? -sortDir : -1; sortKey = th.dataset.k; renderTable();
-  });
+  const skaters = [...new Set(d.days.map(x => x.skater).filter(Boolean))].sort();
+  for (const s of skaters) $("skater").add(new Option(s, s));
+  const chips = {};
+  for (const x of d.days) (chips[x.chip_code] ??= new Set()).add(x.skater ?? "unassigned");
+  for (const c of Object.keys(chips).sort())
+    $("chip").add(new Option(`${c} · ${[...chips[c]].join(", ")}`, c));
+  for (const id of ["skater", "chip", "named", "groupBy"]) $(id).onchange = render;
   render();
 });
 
+function filtered() {
+  const who = $("skater").value, chip = $("chip").value, named = $("named").checked;
+  return data.days.filter(d =>
+    (!who || d.skater === who) && (!chip || d.chip_code === chip) && (!named || who || chip || d.skater));
+}
+
 function render() {
-  const who = $("skater").value;
-  const days = data.days.filter(d => !who || d.skater === who);
+  const days = filtered();
   const dates = [...new Set(days.map(d => d.activity_date))].sort();
 
   $("k-days").textContent = fmt(dates.length);
@@ -98,9 +107,9 @@ function render() {
   const series = {
     labels: dates,
     datasets: [
-      { type: "line", label: "Fastest lap (s)", data: dates.map(k => byDate[k].best), yAxisID: "y",
+      { type: "line", label: "Fastest lap (s)", data: dates.map(k => byDate[k].best), yAxisID: "y", order: 1,
         borderColor: css("--accent"), backgroundColor: css("--accent"), tension: .25, pointRadius: 3 },
-      { type: "bar", label: "Laps", data: dates.map(k => byDate[k].laps), yAxisID: "y1",
+      { type: "bar", label: "Laps", data: dates.map(k => byDate[k].laps), yAxisID: "y1", order: 2,
         backgroundColor: css("--accent2") },
     ],
   };
@@ -119,18 +128,38 @@ function render() {
       },
     },
   });
-  renderTable();
+  renderTable(days);
 }
 
-function renderTable() {
-  const who = $("skater").value;
-  const rows = data.totals.filter(t => !who || t.skater === who)
+function renderTable(days = filtered()) {
+  const by = $("groupBy").value, other = by === "skater" ? "chip_code" : "skater";
+  const groups = {};
+  for (const d of days) {
+    const k = d[by] ?? "unassigned";
+    const g = groups[k] ??= { key: k, others: new Set(), dates: new Set(), sessions: 0, laps: 0,
+                              fastest_lap_sec: Infinity, last_day: "" };
+    g.others.add(d[other] ?? "unassigned"); g.dates.add(d.activity_date);
+    g.sessions += d.sessions; g.laps += d.laps;
+    g.fastest_lap_sec = Math.min(g.fastest_lap_sec, d.fastest_lap_sec);
+    if (d.activity_date > g.last_day) g.last_day = d.activity_date;
+  }
+  const rows = Object.values(groups).map(g => ({ ...g, others: [...g.others].sort().join(", "), training_days: g.dates.size }))
     .sort((a, b) => (a[sortKey] > b[sortKey] ? 1 : a[sortKey] < b[sortKey] ? -1 : 0) * sortDir);
-  $("tbody").innerHTML = rows.map(t => `<tr data-s="${t.skater}">
-    <td>${t.skater}</td><td>${fmt(t.training_days)}</td><td>${fmt(t.sessions)}</td>
-    <td>${fmt(t.laps)}</td><td>${t.fastest_lap_sec?.toFixed(3) ?? "–"}</td><td>${t.last_day}</td></tr>`).join("");
+
+  const cols = [["key", by === "skater" ? "Skater" : "Transponder"], ["others", by === "skater" ? "Transponders" : "Skater"],
+                ["training_days", "Days"], ["sessions", "Sessions"], ["laps", "Laps"],
+                ["fastest_lap_sec", "Fastest (s)"], ["last_day", "Last seen"]];
+  $("thead").innerHTML = cols.map(([k, l]) => `<th data-k="${k}">${l}</th>`).join("");
+  $("thead").querySelectorAll("th").forEach(th => th.onclick = () => {
+    sortDir = sortKey === th.dataset.k ? -sortDir : -1; sortKey = th.dataset.k; renderTable();
+  });
+  $("tbody").innerHTML = rows.map(r => `<tr data-k="${esc(r.key)}">
+    <td>${esc(r.key)}</td><td class="muted">${esc(r.others)}</td><td>${fmt(r.training_days)}</td><td>${fmt(r.sessions)}</td>
+    <td>${fmt(r.laps)}</td><td>${r.fastest_lap_sec.toFixed(3)}</td><td>${r.last_day}</td></tr>`).join("");
   $("tbody").querySelectorAll("tr").forEach(tr => tr.onclick = () => {
-    $("skater").value = $("skater").value === tr.dataset.s ? "" : tr.dataset.s; render();
+    const sel = by === "skater" ? $("skater") : $("chip");
+    if (tr.dataset.k === "unassigned") return;
+    sel.value = sel.value === tr.dataset.k ? "" : tr.dataset.k; render();
   });
 }
 </script>

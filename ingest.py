@@ -16,6 +16,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+import chips
 import sporthive
 
 ROOT = Path(__file__).parent
@@ -38,6 +39,7 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.executescript((ROOT / "sql" / "schema.sql").read_text())
     conn.executescript((ROOT / "sql" / "views.sql").read_text())
+    chips.load_into(conn)
     return conn
 
 
