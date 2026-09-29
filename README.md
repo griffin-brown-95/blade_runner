@@ -4,6 +4,19 @@ Practice-lap analytics for US Speedskating's short track group at the Utah Olymp
 Lap timing comes from the public [Sporthive practice page](https://sporthive.com/practice/4607)
 (MYLAPS transponders, 111 m lap).
 
+## Why
+
+The goal is to track each skater's **progress** and **training load**. The lap data already
+existed, but getting it into a usable shape was slow: download CSV exports from the timing site
+by hand, then clean, merge and chart everything in Excel, every week. That time went to data prep
+instead of athletes.
+
+Blade Runner automates that loop. Laps are pulled nightly into one consistent model of skaters,
+sessions and laps, and the dashboard is current whenever the coaches open it.
+
+On-ice laps are only one part of an athlete's load. This is the foundation for bringing in gym,
+heart-rate and wellness data so the staff can balance total load against progress on the ice.
+
 ```
 Sporthive API ──► ingest.py ──► data/sporthive.sqlite ──► sql/views.sql (metrics)
                                                          ├─► export.py ► site/  (static dashboard, GitHub Pages)
@@ -28,6 +41,21 @@ streamlit run streamlit_app.py                                    # or the Strea
 | `sessions`   | one continuous on-ice run in that day   |
 | `laps`       | one 111 m lap                           |
 | `chip_assignments` | loaded from `data/chips.csv` on every run |
+
+## Streamlit app
+
+Organised as zoom levels so it stays usable over many seasons: **Team → Skater → Day → Lap**.
+The sidebar season filter (seasons run Jul 1 – Jun 30) applies everywhere, and charts
+default to daily, weekly or monthly buckets depending on the span shown.
+
+| Page | Tabs |
+|------|------|
+| Team | Speed (team best or compare skaters) · Volume & lap quality · Leaderboard (click → skater) · Seasons |
+| Skater | Trends (fastest, best-5, valid laps) · Lap quality · Day detail (every lap in order) · Seasons (week-of-season overlay) |
+| Transponders | Edit `data/chips.csv`, see unassigned chips |
+
+Code: `streamlit_app.py` (navigation + sidebar), `app/data.py` (queries, caching, time buckets),
+`app/charts.py` (shared Altair charts), `app/views/*.py` (pages).
 
 Views: `skater_day` (per chip-day, attributed to whoever held the chip that day),
 `skater_totals` (across all of a skater's chips) and `chip_totals`.
@@ -60,8 +88,18 @@ Three ways to edit it:
 to GitHub Pages. Enable Pages with **Settings → Pages → Source: GitHub Actions**. No servers,
 no secrets, no cloud accounts. To hand this to the team, they fork the repo and enable Pages.
 
+## Valid laps
+
+Transponders also count laps when skaters loop the inside of the track (resting, relay tags),
+which produces impossibly fast "laps". `laps_classified` tags every lap `valid`, `too_fast` or
+`too_slow` using `lap_rules` in [sql/views.sql](sql/views.sql) (currently 8.0–11.0 s). All lap
+metrics (sessions, laps, fastest, best-5 average) use valid laps only; raw laps are never deleted.
+
+The range alone doesn't catch everything: shortened laps also land inside 8–11 s. Use the
+Streamlit **Lap inspector** page to look at lap sequences when refining the rules.
+
 ## Known data caveats (to work through)
 
 - Sessions are split by the timing system when a lap exceeds ~20 s; no lap is longer than that.
-- Lap times mix warm-up, technique, and race-pace laps. Fastest-lap is robust; averages are not.
+- Practice block layout may make the practice lap shorter than the 111.12 m race line.
 - The location includes non-team skaters (public sessions, other clubs).

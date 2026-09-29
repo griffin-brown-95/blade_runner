@@ -4,7 +4,7 @@
 import json
 import sqlite3
 
-from ingest import DEFAULT_DB, ROOT, connect
+from ingest import DEFAULT_DB, ROOT, connect_readonly as connect
 
 OUT = ROOT / "site" / "data.json"
 
@@ -16,13 +16,14 @@ def rows(conn: sqlite3.Connection, sql: str) -> list[dict]:
 
 
 def main():
-    conn = connect(DEFAULT_DB)  # also reloads data/chips.csv
+    conn = connect(DEFAULT_DB)  # read-only; applies current views.sql + chips.csv
     payload = {
         "generated_at": conn.execute("SELECT MAX(scraped_at) FROM activities").fetchone()[0],
         "days": rows(conn, """
             SELECT activity_date, chip_code, chip_label, skater,
-                   sessions, laps, fastest_lap_sec, avg_lap_sec, on_ice_min
+                   sessions, laps, all_laps, fastest_lap_sec, best5_avg_sec, avg_lap_sec, on_ice_min
             FROM skater_day WHERE laps > 0 ORDER BY activity_date, chip_code"""),
+        "lap_rules": rows(conn, "SELECT * FROM lap_rules")[0],
     }
     OUT.write_text(json.dumps(payload, separators=(",", ":")))
     print(f"Wrote {OUT} ({len(payload['days'])} chip-days)")

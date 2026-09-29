@@ -4,9 +4,8 @@ import pandas as pd
 import streamlit as st
 
 import chips
-from ingest import DEFAULT_DB, connect
+from ingest import DEFAULT_DB, connect_readonly as connect
 
-st.set_page_config(page_title="Transponders", layout="wide")
 st.title("Transponders")
 st.caption(
     "Each row: this transponder belonged to this skater between these dates (inclusive). "

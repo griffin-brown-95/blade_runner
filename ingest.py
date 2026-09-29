@@ -43,6 +43,22 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def connect_readonly(db_path: Path) -> sqlite3.Connection:
+    """
+    Open the database without ever writing to it, so dashboards can run while
+    ingest.py is loading. The current views.sql and chips.csv are applied as TEMP
+    objects, which shadow the stored ones for this connection only.
+    """
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=30)
+    conn.execute("""CREATE TEMP TABLE chip_assignments (
+        chip_code TEXT NOT NULL, skater TEXT NOT NULL, valid_from TEXT, valid_to TEXT, note TEXT)""")
+    views = (ROOT / "sql" / "views.sql").read_text()
+    conn.executescript(views.replace("DROP VIEW IF EXISTS ", "DROP VIEW IF EXISTS temp.")
+                            .replace("CREATE VIEW ", "CREATE TEMP VIEW "))
+    chips.load_into(conn)
+    return conn
+
+
 def load_activity(conn: sqlite3.Connection, location_id: int, activity: dict, data: dict) -> int:
     activity_id = activity["id"]
     stats = data.get("stats") or {}
@@ -87,12 +103,17 @@ def run(db_path: Path, location_id: int, start: date | None, end: date | None) -
     known = {r[0] for r in conn.execute(
         "SELECT activity_id FROM activities "
         "WHERE activity_date < (SELECT MAX(activity_date) FROM activities)")}
-    loaded = skipped = laps = 0
+    loaded = skipped = failed = laps = 0
     for activity in sporthive.iter_activities(location_id, start, end):
         if activity["id"] in known:
             skipped += 1
             continue
-        data = sporthive.fetch_sessions(activity["id"])
+        try:
+            data = sporthive.fetch_sessions(activity["id"])
+        except RuntimeError as exc:  # not saved, so the next run retries it
+            failed += 1
+            print(f"  ! skipping activity {activity['id']}: {exc}")
+            continue
         laps += load_activity(conn, location_id, activity, data)
         loaded += 1
         if loaded % 50 == 0:
@@ -102,7 +123,7 @@ def run(db_path: Path, location_id: int, start: date | None, end: date | None) -
 
     conn.commit()
     conn.close()
-    print(f"Done: {loaded} activities / {laps} laps loaded, {skipped} skipped.")
+    print(f"Done: {loaded} activities / {laps} laps loaded, {skipped} already loaded, {failed} failed.")
 
 
 def main():

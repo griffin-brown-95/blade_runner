@@ -29,6 +29,7 @@
   tbody tr { cursor:pointer; }
   tbody tr:hover { background:var(--bg); }
   .scroll { overflow-x:auto; }
+  .kpi .note { color:var(--muted); font-size:12px; }
   td.muted { color:var(--muted); text-align:left; white-space:normal; font-size:13px; }
   label { display:flex; gap:6px; align-items:center; }
 </style>
@@ -48,8 +49,9 @@
   <div class="kpis">
     <div class="card kpi"><div class="label">Training days</div><div class="value" id="k-days">–</div></div>
     <div class="card kpi"><div class="label">Sessions</div><div class="value" id="k-sessions">–</div></div>
-    <div class="card kpi"><div class="label">Laps</div><div class="value" id="k-laps">–</div></div>
+    <div class="card kpi"><div class="label">Valid laps</div><div class="value" id="k-laps">–</div><div class="note" id="k-filtered"></div></div>
     <div class="card kpi"><div class="label">Fastest lap</div><div class="value" id="k-fastest">–</div></div>
+    <div class="card kpi"><div class="label">Best-5 average</div><div class="value" id="k-best5">–</div><div class="note">mean of a day's 5 fastest valid laps</div></div>
   </div>
 
   <div class="card chart"><canvas id="trend"></canvas></div>
@@ -97,11 +99,16 @@ function render() {
   $("k-laps").textContent = fmt(days.reduce((s, d) => s + d.laps, 0));
   const best = Math.min(...days.map(d => d.fastest_lap_sec));
   $("k-fastest").textContent = isFinite(best) ? best.toFixed(3) + "s" : "–";
+  const best5 = Math.min(...days.map(d => d.best5_avg_sec ?? Infinity));
+  $("k-best5").textContent = isFinite(best5) ? best5.toFixed(3) + "s" : "–";
+  const r = data.lap_rules;
+  $("k-filtered").textContent = `${fmt(days.reduce((s, d) => s + d.all_laps - d.laps, 0))} outside ${r.min_lap_sec}–${r.max_lap_sec}s filtered`;
 
   // Per date: best lap (line) and laps skated (bars).
-  const byDate = Object.fromEntries(dates.map(k => [k, { best: Infinity, laps: 0 }]));
+  const byDate = Object.fromEntries(dates.map(k => [k, { best: Infinity, best5: Infinity, laps: 0 }]));
   for (const d of days) {
     byDate[d.activity_date].best = Math.min(byDate[d.activity_date].best, d.fastest_lap_sec);
+    byDate[d.activity_date].best5 = Math.min(byDate[d.activity_date].best5, d.best5_avg_sec ?? Infinity);
     byDate[d.activity_date].laps += d.laps;
   }
   const series = {
@@ -109,7 +116,10 @@ function render() {
     datasets: [
       { type: "line", label: "Fastest lap (s)", data: dates.map(k => byDate[k].best), yAxisID: "y", order: 1,
         borderColor: css("--accent"), backgroundColor: css("--accent"), tension: .25, pointRadius: 3 },
-      { type: "bar", label: "Laps", data: dates.map(k => byDate[k].laps), yAxisID: "y1", order: 2,
+      { type: "line", label: "Best-5 average (s)", data: dates.map(k => isFinite(byDate[k].best5) ? byDate[k].best5 : null),
+        yAxisID: "y", order: 1, borderColor: css("--muted"), backgroundColor: css("--muted"), borderDash: [4, 3],
+        tension: .25, pointRadius: 2, spanGaps: true },
+      { type: "bar", label: "Valid laps", data: dates.map(k => byDate[k].laps), yAxisID: "y1", order: 2,
         backgroundColor: css("--accent2") },
     ],
   };
@@ -121,9 +131,9 @@ function render() {
       color: css("--muted"),
       scales: {
         x: { ticks: { color: css("--muted") }, grid: { display: false } },
-        y: { position: "left", title: { display: true, text: "Fastest lap (s)", color: css("--muted") },
+        y: { position: "left", title: { display: true, text: "Lap time (s)", color: css("--muted") },
              ticks: { color: css("--muted") }, grid: { color: css("--line") } },
-        y1: { position: "right", title: { display: true, text: "Laps", color: css("--muted") },
+        y1: { position: "right", title: { display: true, text: "Valid laps", color: css("--muted") },
               ticks: { color: css("--muted") }, grid: { display: false } },
       },
     },
@@ -137,10 +147,11 @@ function renderTable(days = filtered()) {
   for (const d of days) {
     const k = d[by] ?? "unassigned";
     const g = groups[k] ??= { key: k, others: new Set(), dates: new Set(), sessions: 0, laps: 0,
-                              fastest_lap_sec: Infinity, last_day: "" };
+                              fastest_lap_sec: Infinity, best5_avg_sec: Infinity, last_day: "" };
     g.others.add(d[other] ?? "unassigned"); g.dates.add(d.activity_date);
     g.sessions += d.sessions; g.laps += d.laps;
     g.fastest_lap_sec = Math.min(g.fastest_lap_sec, d.fastest_lap_sec);
+    g.best5_avg_sec = Math.min(g.best5_avg_sec, d.best5_avg_sec ?? Infinity);
     if (d.activity_date > g.last_day) g.last_day = d.activity_date;
   }
   const rows = Object.values(groups).map(g => ({ ...g, others: [...g.others].sort().join(", "), training_days: g.dates.size }))
@@ -148,14 +159,15 @@ function renderTable(days = filtered()) {
 
   const cols = [["key", by === "skater" ? "Skater" : "Transponder"], ["others", by === "skater" ? "Transponders" : "Skater"],
                 ["training_days", "Days"], ["sessions", "Sessions"], ["laps", "Laps"],
-                ["fastest_lap_sec", "Fastest (s)"], ["last_day", "Last seen"]];
+                ["fastest_lap_sec", "Fastest (s)"], ["best5_avg_sec", "Best-5 (s)"], ["last_day", "Last seen"]];
   $("thead").innerHTML = cols.map(([k, l]) => `<th data-k="${k}">${l}</th>`).join("");
   $("thead").querySelectorAll("th").forEach(th => th.onclick = () => {
     sortDir = sortKey === th.dataset.k ? -sortDir : -1; sortKey = th.dataset.k; renderTable();
   });
   $("tbody").innerHTML = rows.map(r => `<tr data-k="${esc(r.key)}">
     <td>${esc(r.key)}</td><td class="muted">${esc(r.others)}</td><td>${fmt(r.training_days)}</td><td>${fmt(r.sessions)}</td>
-    <td>${fmt(r.laps)}</td><td>${r.fastest_lap_sec.toFixed(3)}</td><td>${r.last_day}</td></tr>`).join("");
+    <td>${fmt(r.laps)}</td><td>${r.fastest_lap_sec.toFixed(3)}</td>
+    <td>${isFinite(r.best5_avg_sec) ? r.best5_avg_sec.toFixed(3) : "–"}</td><td>${r.last_day}</td></tr>`).join("");
   $("tbody").querySelectorAll("tr").forEach(tr => tr.onclick = () => {
     const sel = by === "skater" ? $("skater") : $("chip");
     if (tr.dataset.k === "unassigned") return;
