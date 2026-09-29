@@ -3,3 +3,8 @@ __pycache__/
 .DS_Store
 sporthive_data/
 data/*.sqlite-journal
+
+# Built by the workflow; the database lives on the "data" release (python ingest.py --download)
+data/sporthive.sqlite
+data/*.download
+site/data.json
