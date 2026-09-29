@@ -84,19 +84,27 @@ Three ways to edit it:
 
 ## Deployment
 
-`.github/workflows/scrape.yml` runs nightly: scrape → commit the SQLite file → publish `site/`
-to GitHub Pages. Enable Pages with **Settings → Pages → Source: GitHub Actions**. No servers,
-no secrets, no cloud accounts. To hand this to the team, they fork the repo and enable Pages.
+`.github/workflows/scrape.yml` runs nightly, on demand, and when `data/chips.csv`, `site/`,
+`sql/` or `export.py` change on `main`:
 
-## Valid laps
+```
+download sporthive.sqlite from the "data" release → ingest.py → export.py
+  → upload sporthive.sqlite back to the release → deploy site/ to GitHub Pages
+```
 
-Transponders also count laps when skaters loop the inside of the track (resting, relay tags),
-which produces impossibly fast "laps". `laps_classified` tags every lap `valid`, `too_fast` or
-`too_slow` using `lap_rules` in [sql/views.sql](sql/views.sql) (currently 8.0–11.0 s). All lap
-metrics (sessions, laps, fastest, best-5 average) use valid laps only; raw laps are never deleted.
+The database is **not** kept in git (a nightly commit of a ~70 MB binary would bloat the repo).
+It lives as an asset on the [`data` release](https://github.com/griffin-brown-95/blade_runner/releases/tag/data).
+Get the latest copy locally with:
 
-The range alone doesn't catch everything: shortened laps also land inside 8–11 s. Use the
-Streamlit **Lap inspector** page to look at lap sequences when refining the rules.
+```bash
+python ingest.py --download
+```
+
+The Streamlit app downloads it automatically when it's missing (fresh clones, Streamlit Cloud).
+
+Setup, once: **Settings → Pages → Source: GitHub Actions**, then **Actions → scrape-and-publish →
+Run workflow**. The dashboard is served at https://griffin-brown-95.github.io/blade_runner/.
+To hand this to the team, they fork the repo, enable Pages, and run the workflow once.
 
 ## Known data caveats (to work through)
 

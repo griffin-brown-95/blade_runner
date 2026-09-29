@@ -13,10 +13,10 @@ st.title("Skater")
 skater = st.selectbox("Skater", skaters, key="skater", label_visibility="collapsed")
 mine_all = all_days[all_days["skater"] == skater]
 mine = data.filtered(mine_all)
-st.caption(f"{st.session_state.get('season')} · transponders: {', '.join(sorted(mine_all['chip_code'].unique()))}")
+st.caption(f"{data.scope_label()} · transponders: {', '.join(sorted(mine_all['chip_code'].unique()))}")
 
 if mine.empty:
-    st.info(f"No laps for {skater} in {st.session_state.get('season')}.")
+    st.info(f"No laps for {skater} · {data.scope_label()}")
 else:
     data.kpis(mine)
 
@@ -61,7 +61,7 @@ with day:
             st.dataframe(laps, use_container_width=True, hide_index=True)
 
 with seasons:
-    st.caption("Across all seasons, regardless of the season filter.")
+    st.caption("All time, regardless of the time range filter.")
     per_season = (mine_all.groupby("season")
                   .agg(training_days=("activity_date", "nunique"), sessions=("sessions", "sum"),
                        valid_laps=("laps", "sum"), fastest_lap_sec=("fastest_lap_sec", "min"),

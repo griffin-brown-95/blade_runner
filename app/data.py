@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 import chips
-from ingest import DEFAULT_DB, connect_readonly as connect
+from ingest import DEFAULT_DB, connect_readonly as connect, download_db
 
 SEASON_START_MONTH = 7  # a season runs Jul 1 -> Jun 30, labelled "2026-27"
 LAP_CLASSES = ["valid", "too_fast", "too_slow"]
@@ -20,6 +20,11 @@ def season_of(d: pd.Timestamp | date) -> str:
 
 def season_start(label: str) -> pd.Timestamp:
     return pd.Timestamp(int(label[:4]), SEASON_START_MONTH, 1)
+
+
+if not DEFAULT_DB.exists():  # fresh clone or Streamlit Cloud: fetch the published database
+    with st.spinner("Downloading the latest lap database…"):
+        download_db()
 
 
 def _version() -> tuple:
@@ -54,17 +59,49 @@ def all_days() -> pd.DataFrame:
 
 # ---- sidebar filters (rendered once in streamlit_app.py, read by every page) ----
 
+RELATIVE_RANGES = {"Last 30 days": 30, "Last 90 days": 90, "Last 12 months": 365}
+
+
 def sidebar(days: pd.DataFrame) -> None:
-    seasons = sorted(days["season"].unique(), reverse=True)
-    st.sidebar.selectbox("Season", seasons + ["All seasons"], key="season")
+    seasons = [f"Season {s}" for s in sorted(days["season"].unique(), reverse=True)]
+    options = ["All time", *RELATIVE_RANGES, *seasons, "Custom dates"]
+    choice = st.sidebar.selectbox("Time range", options, key="range")
+    if choice == "Custom dates":
+        lo, hi = days["activity_date"].min().date(), days["activity_date"].max().date()
+        st.sidebar.date_input("From – to", (lo, hi), min_value=lo, max_value=hi, key="custom_dates")
     st.sidebar.toggle("Named skaters only", value=True, key="named_only",
                       help="Hide transponders with no skater assigned (visitors, other clubs).")
 
 
+def date_bounds() -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+    """Inclusive (start, end) for the sidebar time range; None means unbounded."""
+    choice = st.session_state.get("range", "All time")
+    if choice in RELATIVE_RANGES:
+        return pd.Timestamp(date.today()) - pd.Timedelta(days=RELATIVE_RANGES[choice] - 1), None
+    if choice.startswith("Season "):
+        start = season_start(choice.removeprefix("Season "))
+        return start, start + pd.DateOffset(years=1) - pd.Timedelta(days=1)
+    if choice == "Custom dates":
+        picked = st.session_state.get("custom_dates", ())
+        if len(picked) == 2:
+            return pd.Timestamp(picked[0]), pd.Timestamp(picked[1])
+    return None, None
+
+
+def scope_label() -> str:
+    choice = st.session_state.get("range", "All time")
+    if choice == "Custom dates":
+        lo, hi = date_bounds()
+        return f"{lo:%b %d, %Y} – {hi:%b %d, %Y}" if lo is not None else "All time"
+    return choice
+
+
 def filtered(days: pd.DataFrame) -> pd.DataFrame:
-    season = st.session_state.get("season", "All seasons")
-    if season != "All seasons":
-        days = days[days["season"] == season]
+    lo, hi = date_bounds()
+    if lo is not None:
+        days = days[days["activity_date"] >= lo]
+    if hi is not None:
+        days = days[days["activity_date"] <= hi]
     if st.session_state.get("named_only", True):
         days = days[days["skater"].notna()]
     return days

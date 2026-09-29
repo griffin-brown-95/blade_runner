@@ -1,23 +1,30 @@
-# Nightly: pull new laps into data/sporthive.sqlite, commit it, rebuild the dashboard,
-# and publish site/ to GitHub Pages. No servers, no secrets.
+# Pull new laps, rebuild the dashboard, publish site/ to GitHub Pages.
+#
+# The database is not kept in git (it would add a full copy to history every night).
+# It lives as an asset on the "data" release: download -> ingest -> upload.
 name: scrape-and-publish
 
 on:
   schedule:
     - cron: "0 7 * * *"   # 01:00 Mountain
   workflow_dispatch:
-  push:                   # editing chips.csv on GitHub republishes the dashboard
+  push:                   # editing chips.csv, the site or the metrics republishes the dashboard
     branches: [main]
-    paths: [data/chips.csv]
+    paths: [data/chips.csv, site/**, sql/**, export.py]
 
 permissions:
-  contents: write
+  contents: write   # upload the database to the release
   pages: write
   id-token: write
 
 concurrency:
   group: scrape
   cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  DB: data/sporthive.sqlite
+  RELEASE: data
 
 jobs:
   scrape:
@@ -28,15 +35,25 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install requests
+
+      - name: Download database from release
+        run: |
+          if gh release view "$RELEASE" > /dev/null 2>&1; then
+            gh release download "$RELEASE" -p sporthive.sqlite -D data --clobber
+          elif [ -f "$DB" ]; then
+            echo "No '$RELEASE' release yet; bootstrapping from the database in the repo."
+            gh release create "$RELEASE" --title "Data" \
+              --notes "sporthive.sqlite, updated nightly by the scrape-and-publish workflow."
+          else
+            echo "::error::No '$RELEASE' release and no $DB in the repo to bootstrap from." && exit 1
+          fi
+
       - run: python ingest.py
       - run: python export.py
-      - name: Commit data
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/sporthive.sqlite site/data.json
-          git diff --cached --quiet || git commit -m "data: nightly scrape $(date -u +%F)"
-          git push
+
+      - name: Upload database to release
+        run: gh release upload "$RELEASE" "$DB" --clobber
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

@@ -22,7 +22,7 @@ def main():
         "days": rows(conn, """
             SELECT activity_date, chip_code, chip_label, skater,
                    sessions, laps, all_laps, fastest_lap_sec, best5_avg_sec, avg_lap_sec, on_ice_min
-            FROM skater_day WHERE laps > 0 ORDER BY activity_date, chip_code"""),
+            FROM skater_day WHERE all_laps > 0 ORDER BY activity_date, chip_code"""),
         "lap_rules": rows(conn, "SELECT * FROM lap_rules")[0],
     }
     OUT.write_text(json.dumps(payload, separators=(",", ":")))

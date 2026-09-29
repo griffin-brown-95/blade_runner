@@ -6,7 +6,7 @@ from app import charts, data
 all_days = data.all_days()
 days = data.filtered(all_days)
 st.title("Team")
-st.caption(f"{st.session_state.get('season')} · UOO short track (111 m)")
+st.caption(f"{data.scope_label()} · UOO short track (111 m)")
 if days.empty:
     st.info("No laps for this selection.")
     st.stop()
@@ -51,7 +51,7 @@ with board:
             st.switch_page("app/views/skater.py")
 
 with seasons:
-    st.caption("Across all seasons, regardless of the season filter.")
+    st.caption("All time, regardless of the time range filter.")
     named = all_days[all_days["skater"].notna()] if st.session_state.get("named_only", True) else all_days
     per_season = (named.groupby("season")
                   .agg(training_days=("activity_date", "nunique"), skaters=("skater", "nunique"),

@@ -81,15 +81,19 @@ def load_into(conn: sqlite3.Connection, path: Path = CHIPS_CSV) -> None:
 
 
 def seed(conn: sqlite3.Connection) -> int:
-    """Add a row for every chip whose Sporthive label is a name rather than its code."""
+    """
+    Add a row for every chip whose Sporthive label is a name rather than its code.
+
+    Sporthive keeps one current label per chip and shows it on the chip's whole
+    history, so seeded rows have no start date: the label is our only evidence.
+    """
     rows = read()
     known = {r["chip_code"] for r in rows}
     new = [
-        {"chip_code": code, "skater": label, "valid_from": first, "valid_to": "",
+        {"chip_code": code, "skater": label, "valid_from": "", "valid_to": "",
          "note": "seeded from Sporthive label"}
-        for code, label, first in conn.execute("""
-            SELECT chip_code, chip_label, MIN(activity_date) FROM activities
-            WHERE chip_label <> chip_code GROUP BY chip_code, chip_label""")
+        for code, label in conn.execute("""
+            SELECT DISTINCT chip_code, chip_label FROM activities WHERE chip_label <> chip_code""")
         if code not in known
     ]
     write(rows + new)

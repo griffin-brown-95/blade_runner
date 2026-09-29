@@ -16,12 +16,16 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+import requests
+
 import chips
 import sporthive
 
 ROOT = Path(__file__).parent
 DEFAULT_DB = ROOT / "data" / "sporthive.sqlite"
 DEFAULT_LOCATION = 4607  # UOO Short Track, 111 m
+# Published nightly by .github/workflows/scrape.yml; the database is not kept in git.
+RELEASE_DB_URL = "https://github.com/griffin-brown-95/blade_runner/releases/download/data/sporthive.sqlite"
 
 
 def parse_duration(value: str | None) -> float | None:
@@ -41,6 +45,18 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn.executescript((ROOT / "sql" / "views.sql").read_text())
     chips.load_into(conn)
     return conn
+
+
+def download_db(db_path: Path = DEFAULT_DB, url: str = RELEASE_DB_URL) -> None:
+    """Fetch the latest published database (replaces the local copy)."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = db_path.with_suffix(".download")
+    with requests.get(url, stream=True, timeout=120) as resp:
+        resp.raise_for_status()
+        with tmp.open("wb") as f:
+            for chunk in resp.iter_content(1 << 20):
+                f.write(chunk)
+    tmp.replace(db_path)
 
 
 def connect_readonly(db_path: Path) -> sqlite3.Connection:
@@ -132,7 +148,13 @@ def main():
     p.add_argument("--location-id", type=int, default=DEFAULT_LOCATION)
     p.add_argument("--start-date", type=date.fromisoformat, default=None)
     p.add_argument("--end-date", type=date.fromisoformat, default=None)
+    p.add_argument("--download", action="store_true",
+                   help="Replace the local database with the latest published one, then exit.")
     args = p.parse_args()
+    if args.download:
+        download_db(args.db)
+        print(f"Downloaded {RELEASE_DB_URL} -> {args.db}")
+        return
     run(args.db, args.location_id, args.start_date, args.end_date)
 
 

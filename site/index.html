@@ -40,6 +40,12 @@
   <p class="sub" id="sub">US Speedskating practice laps at the Utah Olympic Oval short track (111 m).</p>
 
   <div class="row">
+    <label>Time range <select id="range"><option value="all">All time</option>
+      <option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last 12 months</option></select></label>
+    <label>Chart by <select id="grain"><option value="auto">Auto</option><option value="day">Day</option>
+      <option value="week">Week</option><option value="month">Month</option></select></label>
+  </div>
+  <div class="row">
     <label>Skater <select id="skater"><option value="">All skaters</option></select></label>
     <label>Transponder <select id="chip"><option value="">All transponders</option></select></label>
     <label><input type="checkbox" id="named" checked> Named skaters only</label>
@@ -71,22 +77,72 @@ const fmt = n => n == null ? "–" : n.toLocaleString();
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 let data, chart, sortKey = "laps", sortDir = -1;
 
-fetch("data.json").then(r => r.json()).then(d => {
+fetch("data.json", { cache: "no-cache" }).then(r => r.json()).then(d => {
   data = d;
   $("sub").textContent += ` Updated ${d.generated_at?.slice(0, 10) ?? "–"}.`;
   const skaters = [...new Set(d.days.map(x => x.skater).filter(Boolean))].sort();
   for (const s of skaters) $("skater").add(new Option(s, s));
-  const chips = {};
-  for (const x of d.days) (chips[x.chip_code] ??= new Set()).add(x.skater ?? "unassigned");
-  for (const c of Object.keys(chips).sort())
-    $("chip").add(new Option(`${c} · ${[...chips[c]].join(", ")}`, c));
-  for (const id of ["skater", "chip", "named", "groupBy"]) $(id).onchange = render;
+  for (const x of d.days) (chipOwners[x.chip_code] ??= new Set()).add(x.skater ?? "unassigned");
+  fillChips();
+  const seasons = [...new Set(d.days.map(x => seasonOf(x.activity_date)))].sort().reverse();
+  for (const s of seasons) $("range").add(new Option(`Season ${s}-${String(s + 1).slice(2)}`, `season:${s}`));
+  for (const id of ["range", "grain", "chip", "groupBy"]) $(id).onchange = render;
+  for (const id of ["skater", "named"]) $(id).onchange = () => { fillChips(); render(); };
   render();
 });
 
+// Transponder dropdown follows the skater filter and the "named skaters only" toggle.
+const chipOwners = {};
+function fillChips() {
+  const who = $("skater").value, named = $("named").checked, keep = $("chip").value;
+  $("chip").length = 1;  // keep "All transponders"
+  for (const c of Object.keys(chipOwners).sort()) {
+    const owners = [...chipOwners[c]];
+    if (who ? !owners.includes(who) : named && owners.every(o => o === "unassigned")) continue;
+    $("chip").add(new Option(`${c} · ${owners.join(", ")}`, c));
+  }
+  $("chip").value = [...$("chip").options].some(o => o.value === keep) ? keep : "";
+}
+
+// Seasons run Jul 1 - Jun 30 and are keyed by their starting year.
+const SEASON_START_MONTH = 7;
+const seasonOf = iso => +iso.slice(0, 4) - (+iso.slice(5, 7) < SEASON_START_MONTH ? 1 : 0);
+const isoDay = dt => dt.toISOString().slice(0, 10);
+
+function dateBounds() {
+  const r = $("range").value;
+  if (r === "all") return [null, null];
+  if (r.startsWith("season:")) {
+    const y = +r.slice(7), m = String(SEASON_START_MONTH).padStart(2, "0");
+    return [`${y}-${m}-01`, isoDay(new Date(Date.UTC(y + 1, SEASON_START_MONTH - 1, 0)))];
+  }
+  const from = new Date(); from.setUTCDate(from.getUTCDate() - (+r - 1));
+  return [isoDay(from), null];
+}
+
+// Bucket a YYYY-MM-DD date into its day, ISO week (Monday) or month.
+function periodOf(iso, grain) {
+  if (grain === "month") return iso.slice(0, 7) + "-01";
+  if (grain === "week") {
+    const dt = new Date(iso + "T00:00:00Z");
+    dt.setUTCDate(dt.getUTCDate() - ((dt.getUTCDay() + 6) % 7));
+    return isoDay(dt);
+  }
+  return iso;
+}
+
+function pickGrain(dates) {
+  if ($("grain").value !== "auto") return $("grain").value;
+  if (!dates.length) return "day";
+  const span = (new Date(dates.at(-1)) - new Date(dates[0])) / 864e5;
+  return span <= 45 ? "day" : span <= 400 ? "week" : "month";
+}
+
 function filtered() {
   const who = $("skater").value, chip = $("chip").value, named = $("named").checked;
+  const [lo, hi] = dateBounds();
   return data.days.filter(d =>
+    (!lo || d.activity_date >= lo) && (!hi || d.activity_date <= hi) &&
     (!who || d.skater === who) && (!chip || d.chip_code === chip) && (!named || who || chip || d.skater));
 }
 
@@ -97,29 +153,44 @@ function render() {
   $("k-days").textContent = fmt(dates.length);
   $("k-sessions").textContent = fmt(days.reduce((s, d) => s + d.sessions, 0));
   $("k-laps").textContent = fmt(days.reduce((s, d) => s + d.laps, 0));
-  const best = Math.min(...days.map(d => d.fastest_lap_sec));
+  const best = Math.min(...days.map(d => d.fastest_lap_sec ?? Infinity));
   $("k-fastest").textContent = isFinite(best) ? best.toFixed(3) + "s" : "–";
   const best5 = Math.min(...days.map(d => d.best5_avg_sec ?? Infinity));
   $("k-best5").textContent = isFinite(best5) ? best5.toFixed(3) + "s" : "–";
   const r = data.lap_rules;
   $("k-filtered").textContent = `${fmt(days.reduce((s, d) => s + d.all_laps - d.laps, 0))} outside ${r.min_lap_sec}–${r.max_lap_sec}s filtered`;
 
-  // Per date: best lap (line) and laps skated (bars).
-  const byDate = Object.fromEntries(dates.map(k => [k, { best: Infinity, best5: Infinity, laps: 0 }]));
+  // Per period: best lap and best-5 (lines) and valid laps skated (bars).
+  const grain = pickGrain(dates);
+  const byDate = {};
   for (const d of days) {
-    byDate[d.activity_date].best = Math.min(byDate[d.activity_date].best, d.fastest_lap_sec);
-    byDate[d.activity_date].best5 = Math.min(byDate[d.activity_date].best5, d.best5_avg_sec ?? Infinity);
-    byDate[d.activity_date].laps += d.laps;
+    const p = byDate[periodOf(d.activity_date, grain)] ??= { best: Infinity, best5: Infinity, laps: 0 };
+    p.best = Math.min(p.best, d.fastest_lap_sec ?? Infinity);
+    p.best5 = Math.min(p.best5, d.best5_avg_sec ?? Infinity);
+    p.laps += d.laps;
   }
+  // Every period between the first and last, so gaps (off-season, camps away) show as gaps.
+  const periods = [];
+  const keys = Object.keys(byDate).sort();
+  for (let k = keys[0]; keys.length && k <= keys.at(-1); ) {
+    periods.push(k);
+    const dt = new Date(k + "T00:00:00Z");
+    if (grain === "month") dt.setUTCMonth(dt.getUTCMonth() + 1);
+    else dt.setUTCDate(dt.getUTCDate() + (grain === "week" ? 7 : 1));
+    k = isoDay(dt);
+  }
+  for (const k of periods) byDate[k] ??= { best: Infinity, best5: Infinity, laps: 0 };
+  const label = k => grain === "month" ? new Date(k + "T00:00:00Z").toLocaleDateString(undefined, { month: "short", year: "numeric", timeZone: "UTC" })
+                   : grain === "week" ? `wk of ${k}` : k;
   const series = {
-    labels: dates,
+    labels: periods.map(label),
     datasets: [
-      { type: "line", label: "Fastest lap (s)", data: dates.map(k => byDate[k].best), yAxisID: "y", order: 1,
+      { type: "line", label: "Fastest lap (s)", data: periods.map(k => isFinite(byDate[k].best) ? byDate[k].best : null), yAxisID: "y", order: 1,
         borderColor: css("--accent"), backgroundColor: css("--accent"), tension: .25, pointRadius: 3 },
-      { type: "line", label: "Best-5 average (s)", data: dates.map(k => isFinite(byDate[k].best5) ? byDate[k].best5 : null),
+      { type: "line", label: "Best-5 average (s)", data: periods.map(k => isFinite(byDate[k].best5) ? byDate[k].best5 : null),
         yAxisID: "y", order: 1, borderColor: css("--muted"), backgroundColor: css("--muted"), borderDash: [4, 3],
-        tension: .25, pointRadius: 2, spanGaps: true },
-      { type: "bar", label: "Valid laps", data: dates.map(k => byDate[k].laps), yAxisID: "y1", order: 2,
+        tension: .25, pointRadius: 2 },
+      { type: "bar", label: "Valid laps", data: periods.map(k => byDate[k].laps), yAxisID: "y1", order: 2,
         backgroundColor: css("--accent2") },
     ],
   };
@@ -150,7 +221,7 @@ function renderTable(days = filtered()) {
                               fastest_lap_sec: Infinity, best5_avg_sec: Infinity, last_day: "" };
     g.others.add(d[other] ?? "unassigned"); g.dates.add(d.activity_date);
     g.sessions += d.sessions; g.laps += d.laps;
-    g.fastest_lap_sec = Math.min(g.fastest_lap_sec, d.fastest_lap_sec);
+    g.fastest_lap_sec = Math.min(g.fastest_lap_sec, d.fastest_lap_sec ?? Infinity);
     g.best5_avg_sec = Math.min(g.best5_avg_sec, d.best5_avg_sec ?? Infinity);
     if (d.activity_date > g.last_day) g.last_day = d.activity_date;
   }
@@ -166,7 +237,7 @@ function renderTable(days = filtered()) {
   });
   $("tbody").innerHTML = rows.map(r => `<tr data-k="${esc(r.key)}">
     <td>${esc(r.key)}</td><td class="muted">${esc(r.others)}</td><td>${fmt(r.training_days)}</td><td>${fmt(r.sessions)}</td>
-    <td>${fmt(r.laps)}</td><td>${r.fastest_lap_sec.toFixed(3)}</td>
+    <td>${fmt(r.laps)}</td><td>${isFinite(r.fastest_lap_sec) ? r.fastest_lap_sec.toFixed(3) : "–"}</td>
     <td>${isFinite(r.best5_avg_sec) ? r.best5_avg_sec.toFixed(3) : "–"}</td><td>${r.last_day}</td></tr>`).join("");
   $("tbody").querySelectorAll("tr").forEach(tr => tr.onclick = () => {
     const sel = by === "skater" ? $("skater") : $("chip");
